@@ -1,46 +1,63 @@
 const express = require("express");
 const cors = require("cors");
-const bodyParser = require("body-parser");
 
 const app = express();
 
 app.use(cors());
-app.use(bodyParser.json());
+app.use(express.json());
 
-//////////////////////////////
-// 🧠 DATABASE (IN MEMORY)
-//////////////////////////////
+//////////////////////////////////////////////////////
+// 🧠 MEMORY DATABASE
+//////////////////////////////////////////////////////
 
 let drivers = [];
-let tickets = new Map();
 
-//////////////////////////////
+let tickets = [];
+
+//////////////////////////////////////////////////////
 // 🧑‍✈️ DRIVER SIGNUP
-//////////////////////////////
+//////////////////////////////////////////////////////
 
 app.post("/driver-signup", (req, res) => {
 
   const { name, password } = req.body;
 
   if (!name || !password) {
-    return res.status(400).json({ error: "Missing fields" });
+    return res.json({
+      error: "Missing fields"
+    });
   }
 
   const exists = drivers.find(d => d.name === name);
+
   if (exists) {
-    return res.status(400).json({ error: "Driver already exists" });
+    return res.json({
+      error: "Driver already exists"
+    });
   }
 
   const driver = {
     id: "D_" + Date.now(),
+
     name,
     password,
+
     earnings: 0,
+
+    location: null,
+
     bus: {
       id: "BUS_" + Date.now(),
-      name: "New Route",
-      fare: 1,
-      acceptTickets: true
+
+      name: "Unnamed Bus",
+
+      fare: 2,
+
+      seats: 10,
+
+      acceptTickets: true,
+
+      active: false
     }
   };
 
@@ -49,136 +66,285 @@ app.post("/driver-signup", (req, res) => {
   res.json(driver);
 });
 
-//////////////////////////////
+//////////////////////////////////////////////////////
 // 🔐 DRIVER LOGIN
-//////////////////////////////
+//////////////////////////////////////////////////////
 
 app.post("/driver-login", (req, res) => {
 
   const { name, password } = req.body;
 
   const driver = drivers.find(
-    d => d.name === name && d.password === password
+    d =>
+      d.name === name &&
+      d.password === password
   );
 
   if (!driver) {
-    return res.status(401).json({ error: "Invalid login" });
+    return res.json({
+      error: "Invalid login"
+    });
   }
 
   res.json(driver);
 });
 
-//////////////////////////////
-// 🚌 UPDATE BUS SETTINGS
-//////////////////////////////
+//////////////////////////////////////////////////////
+// 🚌 UPDATE BUS
+//////////////////////////////////////////////////////
 
 app.post("/update-bus", (req, res) => {
 
-  const { driverId, name, fare, acceptTickets } = req.body;
+  const {
+    driverId,
+    name,
+    fare,
+    seats,
+    acceptTickets
+  } = req.body;
 
-  const driver = drivers.find(d => d.id === driverId);
+  const driver = drivers.find(
+    d => d.id === driverId
+  );
 
   if (!driver) {
-    return res.status(404).json({ error: "Driver not found" });
+    return res.json({
+      error: "Driver not found"
+    });
   }
 
-  if (name !== undefined) driver.bus.name = name;
-  if (fare !== undefined) driver.bus.fare = fare;
-  if (acceptTickets !== undefined) driver.bus.acceptTickets = acceptTickets;
+  if (name !== undefined)
+    driver.bus.name = name;
 
-  res.json(driver.bus);
+  if (fare !== undefined)
+    driver.bus.fare = fare;
+
+  if (seats !== undefined)
+    driver.bus.seats = seats;
+
+  if (acceptTickets !== undefined)
+    driver.bus.acceptTickets =
+      acceptTickets;
+
+  //////////////////////////////////////////////////////
+  // 🚍 MAKE BUS ACTIVE AFTER SAVE
+  //////////////////////////////////////////////////////
+
+  driver.bus.active = true;
+
+  res.json({
+    success: true,
+    bus: driver.bus
+  });
 });
 
-//////////////////////////////
-// 🎟️ CREATE TICKET (AFTER PAYMENT)
-//////////////////////////////
+//////////////////////////////////////////////////////
+// 📍 LIVE GPS UPDATE
+//////////////////////////////////////////////////////
+
+app.post("/update-location", (req, res) => {
+
+  const {
+    driverId,
+    lat,
+    lng
+  } = req.body;
+
+  const driver = drivers.find(
+    d => d.id === driverId
+  );
+
+  if (!driver) {
+    return res.json({
+      error: "Driver not found"
+    });
+  }
+
+  driver.location = {
+    lat,
+    lng
+  };
+
+  driver.bus.active = true;
+
+  res.json({
+    success: true
+  });
+});
+
+//////////////////////////////////////////////////////
+// 🗺️ GET ALL ACTIVE BUSES
+//////////////////////////////////////////////////////
+
+app.get("/buses", (req, res) => {
+
+  const buses = drivers
+    .filter(d =>
+      d.bus.active &&
+      d.location
+    )
+    .map(d => ({
+
+      id: d.bus.id,
+
+      driverId: d.id,
+
+      name: d.bus.name,
+
+      fare: d.bus.fare,
+
+      seats: d.bus.seats,
+
+      acceptTickets:
+        d.bus.acceptTickets,
+
+      earnings: d.earnings,
+
+      location: d.location
+    }));
+
+  res.json(buses);
+});
+
+//////////////////////////////////////////////////////
+// 🎟️ CREATE TICKET
+//////////////////////////////////////////////////////
 
 app.post("/create-ticket", (req, res) => {
 
-  const { userId, busId } = req.body;
+  const {
+    busId,
+    passengerName
+  } = req.body;
 
   const serial =
     "SXM-" +
-    Math.random().toString(36).substr(2, 6).toUpperCase() +
-    "-" +
-    Date.now().toString().slice(-5);
+    Math.random()
+      .toString(36)
+      .substring(2, 8)
+      .toUpperCase();
 
   const ticket = {
     serial,
-    userId,
+
     busId,
+
+    passengerName,
+
     used: false,
+
     createdAt: Date.now()
   };
 
-  tickets.set(serial, ticket);
+  tickets.push(ticket);
 
   res.json(ticket);
 });
 
-//////////////////////////////
-// 📱 SCAN TICKET (DRIVER APP)
-//////////////////////////////
+//////////////////////////////////////////////////////
+// 📱 SCAN TICKET
+//////////////////////////////////////////////////////
 
 app.post("/scan-ticket", (req, res) => {
 
   const { serial } = req.body;
 
-  const ticket = tickets.get(serial);
+  const ticket = tickets.find(
+    t => t.serial === serial
+  );
 
   if (!ticket) {
-    return res.json({ valid: false, msg: "❌ Invalid ticket" });
+    return res.json({
+      valid: false,
+      msg: "❌ Invalid Ticket"
+    });
   }
 
   if (ticket.used) {
-    return res.json({ valid: false, msg: "❌ Already used" });
+    return res.json({
+      valid: false,
+      msg: "❌ Ticket Already Used"
+    });
   }
 
   ticket.used = true;
 
-  res.json({ valid: true, msg: "✅ Accepted" });
+  res.json({
+    valid: true,
+    msg: "✅ Ticket Accepted"
+  });
 });
 
-//////////////////////////////
+//////////////////////////////////////////////////////
 // 💰 ADD EARNINGS
-//////////////////////////////
+//////////////////////////////////////////////////////
 
 app.post("/add-earnings", (req, res) => {
 
-  const { driverId, amount } = req.body;
+  const {
+    driverId,
+    amount
+  } = req.body;
 
-  const driver = drivers.find(d => d.id === driverId);
+  const driver = drivers.find(
+    d => d.id === driverId
+  );
 
   if (!driver) {
-    return res.status(404).json({ error: "Driver not found" });
+    return res.json({
+      error: "Driver not found"
+    });
   }
 
-  driver.earnings += amount;
+  driver.earnings += Number(amount);
 
-  res.json({ earnings: driver.earnings });
+  res.json({
+    earnings: driver.earnings
+  });
 });
 
-//////////////////////////////
-// 📊 GET DRIVER DATA
-//////////////////////////////
+//////////////////////////////////////////////////////
+// 📊 DRIVER DATA
+//////////////////////////////////////////////////////
 
 app.post("/driver-data", (req, res) => {
 
   const { driverId } = req.body;
 
-  const driver = drivers.find(d => d.id === driverId);
+  const driver = drivers.find(
+    d => d.id === driverId
+  );
 
   if (!driver) {
-    return res.status(404).json({ error: "Driver not found" });
+    return res.json({
+      error: "Driver not found"
+    });
   }
 
   res.json(driver);
 });
 
-//////////////////////////////
-// 🚀 START SERVER
-//////////////////////////////
+//////////////////////////////////////////////////////
+// 🌐 ROOT TEST
+//////////////////////////////////////////////////////
 
-app.listen(3000, () => {
-  console.log("🚍 SXM Bus Backend running on port 3000");
+app.get("/", (req, res) => {
+
+  res.send("🚍 SXM Bus Backend Running");
+
+});
+
+//////////////////////////////////////////////////////
+// 🚀 START SERVER
+//////////////////////////////////////////////////////
+
+const PORT =
+  process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+
+  console.log(
+    "🚍 Server running on port " + PORT
+  );
+
 });
