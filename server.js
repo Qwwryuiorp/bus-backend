@@ -1,7 +1,6 @@
 const express = require("express");
 const cors = require("cors");
 const bodyParser = require("body-parser");
-const axios = require("axios");
 
 const app = express();
 
@@ -9,114 +8,171 @@ app.use(cors());
 app.use(bodyParser.json());
 
 //////////////////////////////
-// 🧠 MEMORY DATABASE (TEMP)
+// 🧠 DATABASE (IN MEMORY)
 //////////////////////////////
 
-const tickets = new Map();
-const usedSerials = new Set();
+let drivers = [];
+let tickets = new Map();
 
 //////////////////////////////
-// 🔐 PAYPAL CONFIG
+// 🧑‍✈️ DRIVER SIGNUP
 //////////////////////////////
 
-const PAYPAL_CLIENT = "YOUR_CLIENT_ID";
-const PAYPAL_SECRET = "YOUR_SECRET";
-const PAYPAL_API = "https://api-m.sandbox.paypal.com";
+app.post("/driver-signup", (req, res) => {
 
-//////////////////////////////
-// 🔑 GET PAYPAL TOKEN
-//////////////////////////////
+  const { name, password } = req.body;
 
-async function getToken() {
-  const res = await axios({
-    url: PAYPAL_API + "/v1/oauth2/token",
-    method: "post",
-    auth: {
-      username: PAYPAL_CLIENT,
-      password: PAYPAL_SECRET
-    },
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded"
-    },
-    data: "grant_type=client_credentials"
-  });
-
-  return res.data.access_token;
-}
-
-//////////////////////////////
-// 💳 VERIFY PAYMENT
-//////////////////////////////
-
-app.post("/verify-payment", async (req, res) => {
-  const { orderID, userId, busId } = req.body;
-
-  try {
-    const token = await getToken();
-
-    const order = await axios({
-      url: `${PAYPAL_API}/v2/checkout/orders/${orderID}`,
-      method: "get",
-      headers: {
-        Authorization: `Bearer ${token}`
-      }
-    });
-
-    const status = order.data.status;
-
-    if (status !== "COMPLETED") {
-      return res.status(400).json({ error: "Payment not completed" });
-    }
-
-    // 🔐 CREATE UNIQUE SERIAL
-    let serial;
-    do {
-      serial =
-        "SXM-" +
-        Math.random().toString(36).substr(2, 6).toUpperCase() +
-        "-" +
-        Date.now().toString().slice(-5);
-    } while (usedSerials.has(serial));
-
-    usedSerials.add(serial);
-
-    const ticket = {
-      serial,
-      userId,
-      busId,
-      used: false,
-      createdAt: Date.now()
-    };
-
-    tickets.set(serial, ticket);
-
-    res.json(ticket);
-
-  } catch (err) {
-    res.status(500).json({ error: "Verification failed" });
+  if (!name || !password) {
+    return res.status(400).json({ error: "Missing fields" });
   }
+
+  const exists = drivers.find(d => d.name === name);
+  if (exists) {
+    return res.status(400).json({ error: "Driver already exists" });
+  }
+
+  const driver = {
+    id: "D_" + Date.now(),
+    name,
+    password,
+    earnings: 0,
+    bus: {
+      id: "BUS_" + Date.now(),
+      name: "New Route",
+      fare: 1,
+      acceptTickets: true
+    }
+  };
+
+  drivers.push(driver);
+
+  res.json(driver);
 });
 
 //////////////////////////////
-// 📱 DRIVER SCAN CHECK
+// 🔐 DRIVER LOGIN
 //////////////////////////////
 
-app.post("/scan", (req, res) => {
+app.post("/driver-login", (req, res) => {
+
+  const { name, password } = req.body;
+
+  const driver = drivers.find(
+    d => d.name === name && d.password === password
+  );
+
+  if (!driver) {
+    return res.status(401).json({ error: "Invalid login" });
+  }
+
+  res.json(driver);
+});
+
+//////////////////////////////
+// 🚌 UPDATE BUS SETTINGS
+//////////////////////////////
+
+app.post("/update-bus", (req, res) => {
+
+  const { driverId, name, fare, acceptTickets } = req.body;
+
+  const driver = drivers.find(d => d.id === driverId);
+
+  if (!driver) {
+    return res.status(404).json({ error: "Driver not found" });
+  }
+
+  if (name !== undefined) driver.bus.name = name;
+  if (fare !== undefined) driver.bus.fare = fare;
+  if (acceptTickets !== undefined) driver.bus.acceptTickets = acceptTickets;
+
+  res.json(driver.bus);
+});
+
+//////////////////////////////
+// 🎟️ CREATE TICKET (AFTER PAYMENT)
+//////////////////////////////
+
+app.post("/create-ticket", (req, res) => {
+
+  const { userId, busId } = req.body;
+
+  const serial =
+    "SXM-" +
+    Math.random().toString(36).substr(2, 6).toUpperCase() +
+    "-" +
+    Date.now().toString().slice(-5);
+
+  const ticket = {
+    serial,
+    userId,
+    busId,
+    used: false,
+    createdAt: Date.now()
+  };
+
+  tickets.set(serial, ticket);
+
+  res.json(ticket);
+});
+
+//////////////////////////////
+// 📱 SCAN TICKET (DRIVER APP)
+//////////////////////////////
+
+app.post("/scan-ticket", (req, res) => {
+
   const { serial } = req.body;
 
   const ticket = tickets.get(serial);
 
   if (!ticket) {
-    return res.json({ valid: false, msg: "Invalid ticket" });
+    return res.json({ valid: false, msg: "❌ Invalid ticket" });
   }
 
   if (ticket.used) {
-    return res.json({ valid: false, msg: "Already used" });
+    return res.json({ valid: false, msg: "❌ Already used" });
   }
 
   ticket.used = true;
 
-  res.json({ valid: true, msg: "Accepted" });
+  res.json({ valid: true, msg: "✅ Accepted" });
+});
+
+//////////////////////////////
+// 💰 ADD EARNINGS
+//////////////////////////////
+
+app.post("/add-earnings", (req, res) => {
+
+  const { driverId, amount } = req.body;
+
+  const driver = drivers.find(d => d.id === driverId);
+
+  if (!driver) {
+    return res.status(404).json({ error: "Driver not found" });
+  }
+
+  driver.earnings += amount;
+
+  res.json({ earnings: driver.earnings });
+});
+
+//////////////////////////////
+// 📊 GET DRIVER DATA
+//////////////////////////////
+
+app.post("/driver-data", (req, res) => {
+
+  const { driverId } = req.body;
+
+  const driver = drivers.find(d => d.id === driverId);
+
+  if (!driver) {
+    return res.status(404).json({ error: "Driver not found" });
+  }
+
+  res.json(driver);
 });
 
 //////////////////////////////
@@ -124,5 +180,5 @@ app.post("/scan", (req, res) => {
 //////////////////////////////
 
 app.listen(3000, () => {
-  console.log("Backend running on http://localhost:3000");
+  console.log("🚍 SXM Bus Backend running on port 3000");
 });
